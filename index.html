@@ -434,7 +434,7 @@ const SUPABASE_DEFAULT = {
   key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZpbmRneHRwb215Y3VmeGZzeWl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwMjQ3NzcsImV4cCI6MjA5ODYwMDc3N30.T3NfIknk3xtywO3E8Xs6LlWFgZNUnV-HUoj9RbIQ9ig'
 };
 
-const APP_VERSION = 'v1.6';
+const APP_VERSION = 'v1.6.1';
 const S = { meals: [], finances: [], tasks: [], events: [], history: [], settings: null };
 let storageMode = 'none';
 let localTs = 0; // timestamp da última gravação conhecida (p/ sync entre dispositivos)
@@ -618,9 +618,16 @@ input.addEventListener('focus', () => {
   }, 300);
 });
 if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', () => {
+  const vv = window.visualViewport;
+  const vvFix = () => {
+    // iOS: o teclado cobre o layout sem redimensioná-lo — encolhe o app
+    // para a altura visível, mantendo a barra de texto acima do teclado
+    document.body.style.height = vv.height + 'px';
+    window.scrollTo(0, 0);
     if (document.activeElement === input) scrollChat();
-  });
+  };
+  vv.addEventListener('resize', vvFix);
+  vv.addEventListener('scroll', vvFix);
 }
 
 /* ---------- menu "/" ---------- */
