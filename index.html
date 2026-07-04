@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Farol — assistente pessoal</title>
 <meta name="theme-color" content="#101418">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -208,6 +210,11 @@ nav button[data-view=tasks].active{color:var(--sun)}
 .goal-fill.over{background:var(--clay)}
 .budget-alert{margin-top:8px;font-size:.76rem;color:var(--sun)}
 .budget-alert.over{color:var(--clay)}
+.mini-bars{display:flex;align-items:flex-end;gap:6px;height:56px;margin:10px 0 2px}
+.mini-bars .mb{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;height:100%;justify-content:flex-end}
+.mini-bars .mb i{display:block;width:100%;background:var(--leaf);border-radius:3px 3px 0 0;min-height:2px}
+.mini-bars .mb b{font-size:.58rem;color:var(--ink-dim);font-weight:500;font-family:'Sora',sans-serif}
+.review-week{font-size:.74rem;color:var(--ink-dim);margin-top:6px}
 
 /* ---------- NEGÓCIOS ---------- */
 .biz-row{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-bottom:8px}
@@ -320,6 +327,7 @@ nav button[data-view=tasks].active{color:var(--sun)}
       <button class="quick-btn" onclick="quickAction('tarefa')"><span>✓</span>Tarefa</button>
     </div>
     <div id="briefingBox"></div>
+    <div id="reviewBox"></div>
     <div id="homeCards"></div>
   </section>
 
@@ -434,8 +442,8 @@ const SUPABASE_DEFAULT = {
   key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZpbmRneHRwb215Y3VmeGZzeWl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwMjQ3NzcsImV4cCI6MjA5ODYwMDc3N30.T3NfIknk3xtywO3E8Xs6LlWFgZNUnV-HUoj9RbIQ9ig'
 };
 
-const APP_VERSION = 'v1.6.1';
-const S = { meals: [], finances: [], tasks: [], events: [], history: [], settings: null };
+const APP_VERSION = 'v1.8';
+const S = { meals: [], finances: [], tasks: [], events: [], history: [], settings: null, recurring: [] };
 let storageMode = 'none';
 let localTs = 0; // timestamp da última gravação conhecida (p/ sync entre dispositivos)
 const DEFAULT_SETTINGS = {
@@ -479,7 +487,7 @@ async function loadState() {
       const r = await window.storage.get('farol_data');
       if (r && r.value) {
         const d = JSON.parse(r.value);
-        ['meals', 'finances', 'tasks', 'events', 'history', 'settings'].forEach(k => { if (d[k] != null) S[k] = d[k]; });
+        ['meals', 'finances', 'tasks', 'events', 'history', 'settings', 'recurring'].forEach(k => { if (d[k] != null) S[k] = d[k]; });
         localTs = d.ts || 0;
         loaded = true;
       }
@@ -498,7 +506,7 @@ async function loadState() {
       const raw = localStorage.getItem('farol_data');
       if (raw) {
         const d = JSON.parse(raw);
-        ['meals', 'finances', 'tasks', 'events', 'history', 'settings'].forEach(k => { if (d[k] != null) S[k] = d[k]; });
+        ['meals', 'finances', 'tasks', 'events', 'history', 'settings', 'recurring'].forEach(k => { if (d[k] != null) S[k] = d[k]; });
         localTs = d.ts || 0;
       }
     } catch (e) { /* dados corrompidos: começa limpo */ }
@@ -526,8 +534,8 @@ async function persistAll(attempt) {
   if (!storageOK) return;
   localTs = Date.now();
   const payload = JSON.stringify({
-    meals: S.meals, finances: S.finances, tasks: S.tasks,
-    events: S.events, history: S.history, settings: S.settings, ts: localTs
+    meals: S.meals, finances: S.finances, tasks: S.tasks, events: S.events,
+    history: S.history, settings: S.settings, recurring: S.recurring, ts: localTs
   });
   if (storageMode === 'local') {
     try { localStorage.setItem('farol_data', payload); } catch (e) { console.error('localStorage fail', e); }
@@ -638,7 +646,8 @@ const SLASH_CMDS = [
   ['✓', 'Nova tarefa', 'lembrar de '],
   ['📅', 'Marcar compromisso', 'marcar '],
   ['📊', 'Relatório do mês', 'me dá um relatório completo deste mês'],
-  ['📸', 'Foto do prato', null]
+  ['📸', 'Foto do prato', null],
+  ['🧾', 'Foto de recibo/extrato', '@recibo']
 ];
 function renderSlashMenu() {
   const menu = document.getElementById('slashMenu');
@@ -656,6 +665,7 @@ function pickSlash(i) {
   const [, , tmpl] = SLASH_CMDS[i];
   closeSlash();
   if (tmpl === null) { input.value = ''; document.getElementById('photoInput').click(); return; }
+  if (tmpl === '@recibo') { input.value = 'É um recibo/comprovante — lança nas finanças'; document.getElementById('photoInput').click(); return; }
   input.value = tmpl;
   if (!tmpl.endsWith(' ')) { send(); return; }
   input.focus();
@@ -733,7 +743,22 @@ function dataSummary() {
     tarefas: S.tasks.map(t => ({ id: t.id, titulo: t.title, prazo: t.due, feita: !!t.done })),
     eventos: S.events.filter(e => e.date >= today).map(e => ({ id: e.id, titulo: e.title, data: e.date, hora: e.time, local: e.location })),
     metas_macros_diarias: S.settings.goals,
-    orcamentos_mensais_por_categoria: S.settings.budgets
+    orcamentos_mensais_por_categoria: S.settings.budgets,
+    lancamentos_fixos_mensais: (S.recurring || []).map(r => ({ id: r.id, desc: r.desc, valor: r.amount, tipo: r.kind, dia: r.day, categoria: r.category, negocio: r.business })),
+    ultimos_7_dias: (() => {
+      const out = [];
+      for (let i = 6; i >= 0; i--) {
+        const ds = todayStr(new Date(Date.now() - i * 864e5));
+        const ms = S.meals.filter(m => m.date === ds);
+        out.push({
+          data: ds,
+          kcal: Math.round(ms.reduce((a, m) => a + (m.kcal || 0), 0)),
+          proteina_g: Math.round(ms.reduce((a, m) => a + (m.protein_g || 0), 0)),
+          gasto: Math.round(S.finances.filter(f => f.kind === 'despesa' && f.date === ds).reduce((a, f) => a + f.amount, 0) * 100) / 100
+        });
+      }
+      return out;
+    })()
   };
 }
 function resumoMesesAnteriores() {
@@ -766,9 +791,16 @@ Ações possíveis dentro de "actions":
 4. {"type":"complete_task","id":"id da tarefa (dos dados abaixo)"}
 5. {"type":"add_event","event":{"title":"...","date":"YYYY-MM-DD","time":"HH:MM ou null","location":"... ou null"}}
 6. {"type":"delete_item","collection":"meals|finances|tasks|events","id":"..."}
+7. {"type":"add_recurring","rec":{"desc":"Internet","amount":120,"kind":"despesa|receita","category":"Moradia","business":"Pessoal","day":5}}
+   (lançamento fixo mensal — o app materializa automaticamente todo mês no dia indicado; use quando o usuário falar em gasto/receita fixo, mensalidade, assinatura, "todo mês")
+8. {"type":"delete_recurring","id":"id do fixo (dos dados abaixo)"}
 
 Regras:
-- Se receber FOTO de comida: identifique cada alimento visível, estime a porção e os macros, e gere um add_meal. No reply, resuma o que identificou.
+- FOTOS — identifique o tipo antes de agir:
+  · Comida/prato: identifique cada alimento visível, estime porção e macros → add_meal. No reply, resuma o que identificou.
+  · Cupom fiscal, recibo, comprovante PIX ou nota: extraia valor total, data e estabelecimento → um add_finance (desc = estabelecimento, categoria e negócio inferidos).
+  · Print de extrato bancário ou fatura de cartão: lance UMA add_finance por transação identificável (ignore saldos, estornos casados e linhas ilegíveis). No reply, resuma quantas lançou e o total.
+  · Se a imagem estiver ilegível ou ambígua, diga exatamente o que faltou em vez de chutar valores.
 - Datas relativas ("ontem", "sexta") → converta para YYYY-MM-DD usando a data de hoje.
 - Perguntas/relatórios ("quanto gastei", "resumo da semana", "quantas calorias comi"): responda no reply usando os dados abaixo, com números formatados em R$ e quebras de linha (\\n) quando ajudar. Sem actions.
 - Se algo estiver ambíguo (valor sem contexto, por exemplo), pergunte no reply em vez de chutar.
@@ -958,6 +990,16 @@ function applyAction(a) {
       S.events.push(ev); saveState('events');
       renderEventCard(ev);
     }
+    else if (a.type === 'add_recurring' && a.rec) {
+      const r = a.rec;
+      const rec = { id: uid(), desc: r.desc || '—', amount: Math.abs(Number(r.amount) || 0), kind: r.kind === 'receita' ? 'receita' : 'despesa', category: r.category || 'Outros', business: BIZ.includes(r.business) ? r.business : 'Pessoal', day: Math.min(Math.max(1, Number(r.day) || 1), 31), active: true };
+      S.recurring.push(rec); saveState('recurring');
+      materializeRecurring();
+      renderRecurringCard(rec);
+    }
+    else if (a.type === 'delete_recurring' && a.id) {
+      S.recurring = S.recurring.filter(x => x.id !== a.id); saveState('recurring');
+    }
     else if (a.type === 'delete_item' && a.collection && a.id) {
       const col = { meals: 'meals', finances: 'finances', tasks: 'tasks', events: 'events' }[a.collection];
       if (col) { S[col] = S[col].filter(x => x.id !== a.id); saveState(col); }
@@ -1005,6 +1047,13 @@ function renderFinanceCard(e) {
     <div class="sub" style="color:var(--ink-dim);font-size:.78rem">${esc(e.category)}${e.business && e.business !== 'Pessoal' ? ' · ' + esc(e.business) : ''} · ${fmtDate(e.date)}</div></div>
     <div class="amount ${pos ? 'pos' : 'neg'}">${pos ? '+' : '−'}${fmtBR(e.amount)}</div></div>`;
   addUndo(c, 'finances', e.id);
+}
+function renderRecurringCard(r) {
+  const c = makeCard('finance', '🔁 fixo mensal criado');
+  c.innerHTML += `<div class="row"><div><div class="card-title" style="margin:0">${esc(r.desc)}</div>
+    <div class="sub" style="color:var(--ink-dim);font-size:.78rem">${esc(r.category)} · todo dia ${r.day}</div></div>
+    <div class="amount ${r.kind === 'receita' ? 'pos' : 'neg'}">${r.kind === 'receita' ? '+' : '−'}${fmtBR(r.amount)}/mês</div></div>`;
+  addUndo(c, 'recurring', r.id);
 }
 function renderTaskCard(t) {
   const c = makeCard('task', '✅ tarefa criada');
@@ -1071,6 +1120,25 @@ function goalBar(label, val, goal, unit) {
     <div class="goal-track"><div class="goal-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div></div>`;
 }
 
+function materializeRecurring() {
+  const today = todayStr();
+  const [y, m] = today.split('-');
+  const monthKey = today.slice(0, 7);
+  let changed = false;
+  (S.recurring || []).forEach(rec => {
+    if (rec.active === false) return;
+    const dim = new Date(Number(y), Number(m), 0).getDate();
+    const day = Math.min(Math.max(1, rec.day || 1), dim);
+    const date = `${monthKey}-${String(day).padStart(2, '0')}`;
+    if (date > today) return; // ainda não chegou o dia neste mês
+    if (S.finances.some(f => f.recurringId === rec.id && f.date && f.date.startsWith(monthKey))) return;
+    S.finances.push({ id: uid(), recurringId: rec.id, kind: rec.kind, desc: rec.desc, amount: rec.amount, category: rec.category, business: rec.business, date });
+    changed = true;
+  });
+  if (changed) saveState('finances');
+  return changed;
+}
+
 function nowCardHTML() {
   const today = todayStr();
   const now = new Date();
@@ -1115,9 +1183,11 @@ function renderHome() {
 
   const today = todayStr();
   const month = today.slice(0, 7);
+  materializeRecurring();
   const wrap = document.getElementById('homeCards');
   wrap.innerHTML = nowCardHTML();
   generateBriefing(false);
+  renderReviewCard();
 
   /* --- Comida hoje --- */
   const mealsToday = S.meals.filter(m => m.date === today);
@@ -1196,6 +1266,71 @@ function renderHome() {
         ).join('') + (open.length > 3 ? `<div class="hc-empty" style="margin-top:4px">+ ${open.length - 3} outras…</div>` : '')
       : `<div class="hc-empty">Tudo em dia ✓</div>`);
   wrap.appendChild(cTask);
+}
+
+/* ---------- revisão semanal (domingos) ---------- */
+function weekData() {
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 864e5);
+    const ds = todayStr(d);
+    days.push({
+      label: WEEK[d.getDay()].slice(0, 3),
+      kcal: Math.round(S.meals.filter(m => m.date === ds).reduce((a, m) => a + (m.kcal || 0), 0)),
+      spend: S.finances.filter(f => f.kind === 'despesa' && f.date === ds).reduce((a, f) => a + f.amount, 0)
+    });
+  }
+  let prevSpend = 0;
+  for (let i = 13; i >= 7; i--) {
+    const ds = todayStr(new Date(Date.now() - i * 864e5));
+    prevSpend += S.finances.filter(f => f.kind === 'despesa' && f.date === ds).reduce((a, f) => a + f.amount, 0);
+  }
+  return { days, spend: days.reduce((a, d) => a + d.spend, 0), prevSpend };
+}
+function renderReviewCard() {
+  const box = document.getElementById('reviewBox');
+  if (new Date().getDay() !== 0) { box.innerHTML = ''; return; } // só aos domingos
+  const w = weekData();
+  const max = Math.max(1, ...w.days.map(d => d.kcal));
+  const bars = `<div class="mini-bars">${w.days.map(d =>
+    `<div class="mb"><i style="height:${(d.kcal / max * 100).toFixed(0)}%"></i><b>${d.label}</b></div>`).join('')}</div>
+    <div class="review-week">kcal por dia · gastos da semana: <b style="color:var(--ink)">${fmtBR(w.spend)}</b> (anterior: ${fmtBR(w.prevSpend)})</div>`;
+  const rev = S.settings.review || {};
+  const today = todayStr();
+  const body = rev.date === today && rev.text
+    ? `<div style="margin-top:10px;white-space:pre-wrap">${esc(rev.text)}</div>`
+    : `<div class="btn-row" style="margin-top:10px"><button class="btn ghost" onclick="generateReview()">Gerar análise da semana ✨</button></div>`;
+  box.innerHTML = `<div class="briefing"><div class="hc-head">
+    <span style="font-family:'Sora',sans-serif;font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-dim)">🗓 Revisão da semana</span>
+    ${rev.date === today && rev.text ? '<button class="refresh" onclick="generateReview()">refazer ↻</button>' : ''}
+  </div>${bars}${body}</div>`;
+}
+async function generateReview() {
+  const box = document.getElementById('reviewBox');
+  const btn = box.querySelector('.btn, .refresh');
+  if (btn) btn.textContent = 'gerando…';
+  try {
+    const d = new Date();
+    const ep = aiEndpoint();
+    const resp = await fetch(ep.url, {
+      method: 'POST',
+      headers: ep.headers,
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        system: `Você é o Farol, assistente pessoal do Claudio. Hoje é domingo, ${todayStr()}. Gere uma REVISÃO DA SEMANA em texto puro (sem JSON/markdown): 4 a 6 frases cobrindo alimentação (média de kcal e proteína vs metas, padrão dos dias), finanças (total gasto vs semana anterior, categorias que pesaram, orçamentos), tarefas concluídas vs pendentes, e feche com 1-2 sugestões práticas para a próxima semana. Tom direto e caloroso, valores em R$.\n\nDADOS: ${JSON.stringify(dataSummary())}\nTarefas concluídas: ${S.tasks.filter(t => t.done).length}, pendentes: ${S.tasks.filter(t => !t.done).length}`,
+        messages: [{ role: 'user', content: 'Gere a revisão da semana.' }]
+      })
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error.message);
+    const text = data.content.map(x => x.type === 'text' ? x.text : '').join('').trim();
+    S.settings.review = { date: todayStr(), text };
+    saveState('settings');
+    renderReviewCard();
+  } catch (e) {
+    if (btn) btn.textContent = 'erro — tentar de novo';
+  }
 }
 
 function budgetAlerts(byCat) {
@@ -1554,11 +1689,21 @@ function saveSettings() {
 
 /* ================= SUPABASE SYNC ================= */
 let syncTimer = null;
+let syncDirty = false; // há mudanças locais ainda não enviadas à nuvem
 function scheduleSync() {
   const c = S.settings && S.settings.supabase;
   if (!c || !c.url || !c.key) return;
+  syncDirty = true;
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => supaPush(false), 4000);
+  syncTimer = setTimeout(() => supaPush(false), 2500);
+}
+/* descarga imediata: quando o app vai pra segundo plano, envia na hora
+   (com keepalive, que o navegador deixa completar mesmo fechando) */
+function flushSync() {
+  const c = S.settings && S.settings.supabase;
+  if (!c || !c.url || !c.key || !syncDirty) return;
+  clearTimeout(syncTimer);
+  supaPush(false, true);
 }
 function setSyncStatus(msg) {
   const el = document.getElementById('syncStatus');
@@ -1567,21 +1712,22 @@ function setSyncStatus(msg) {
 function sbHeaders(c) {
   return { apikey: c.key, Authorization: 'Bearer ' + c.key, 'Content-Type': 'application/json' };
 }
-async function supaPush(manual) {
+async function supaPush(manual, keepalive) {
   const c = S.settings.supabase;
   if (!c.url || !c.key) { if (manual) setSyncStatus('Configure URL e anon key primeiro.'); return; }
   const pushTs = Date.now();
   try {
     const r = await fetch(c.url + '/rest/v1/farol', {
       method: 'POST',
+      keepalive: !!keepalive,
       headers: Object.assign(sbHeaders(c), { Prefer: 'resolution=merge-duplicates' }),
       body: JSON.stringify({
         id: 'principal',
-        data: { meals: S.meals, finances: S.finances, tasks: S.tasks, events: S.events, history: S.history, settings: { goals: S.settings.goals, budgets: S.settings.budgets }, ts: pushTs },
+        data: { meals: S.meals, finances: S.finances, tasks: S.tasks, events: S.events, history: S.history, recurring: S.recurring, settings: { goals: S.settings.goals, budgets: S.settings.budgets }, ts: pushTs },
         updated_at: new Date().toISOString()
       })
     });
-    if (r.ok) localTs = pushTs;
+    if (r.ok) { localTs = pushTs; syncDirty = false; }
     setSyncStatus(r.ok ? '✓ Enviado à nuvem ' + new Date().toLocaleTimeString('pt-BR') : 'Erro no envio (' + r.status + ') — confira a tabela e a policy.');
   } catch (e) {
     setSyncStatus('Sem conexão com o Supabase (bloqueio de rede ou URL errada).');
@@ -1597,7 +1743,7 @@ async function supaPull(manual) {
       const d = rows[0].data;
       // automático: só aplica se a nuvem for mais nova que este dispositivo
       if (!manual && (d.ts || 0) <= localTs) return;
-      ['meals', 'finances', 'tasks', 'events', 'history'].forEach(k => { if (Array.isArray(d[k])) S[k] = d[k]; });
+      ['meals', 'finances', 'tasks', 'events', 'history', 'recurring'].forEach(k => { if (Array.isArray(d[k])) S[k] = d[k]; });
       if (d.settings) {
         if (d.settings.goals) S.settings.goals = Object.assign({}, S.settings.goals, d.settings.goals);
         if (d.settings.budgets) S.settings.budgets = d.settings.budgets;
@@ -1630,13 +1776,29 @@ function rehydrateChat() {
   await loadState();
   if (!storageOK) document.getElementById('storageWarn').style.display = 'block';
   else persistAll(0); // consolida na chave única (inclusive dados migrados do formato antigo)
-  if (S.settings.supabase.url && S.settings.supabase.key) await supaPull(false);
+  if (S.settings.supabase.url && S.settings.supabase.key) {
+    await supaPull(false);   // traz o que outros dispositivos enviaram
+    syncDirty = true;
+    supaPush(false);         // e envia o que ficou pendente aqui (inofensivo se igual)
+  }
+  materializeRecurring();
+  // service worker: app instalável e funcional offline (só fora do Claude)
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && storageMode !== 'artifact') {
+    try { navigator.serviceWorker.register('sw.js'); } catch (e) { /* sem suporte */ }
+  }
   rehydrateChat();
   showView('home');
-  // ao voltar pro app (troca de aba/desbloqueio), busca novidades de outros dispositivos
+  // ciclo de vida: ao voltar, busca novidades; ao sair, descarrega pendências na hora
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && !inFlight && S.settings.supabase.url) supaPull(false);
+    if (!S.settings.supabase.url) return;
+    if (document.visibilityState === 'visible') { if (!inFlight) supaPull(false); }
+    else flushSync();
   });
+  window.addEventListener('pagehide', flushSync);
+  // com o app aberto, verifica a nuvem a cada 60s (dois dispositivos abertos ao mesmo tempo)
+  setInterval(() => {
+    if (document.visibilityState === 'visible' && !inFlight && !syncDirty && S.settings.supabase.url) supaPull(false);
+  }, 60000);
 })();
 </script>
 </body>
