@@ -241,6 +241,19 @@ nav button[data-view=tasks].active{color:var(--sun)}
 .gear-btn{background:none;border:none;color:var(--ink-dim);cursor:pointer;padding:4px;margin-left:10px}
 .gear-btn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 
+/* ---------- editor de refeição por alimento ---------- */
+.mi{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:8px}
+.mi-top{display:flex;gap:6px;align-items:center}
+.mi input{background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px 9px;font-family:inherit;font-size:.85rem;outline:none;min-width:0}
+.mi input:focus{border-color:var(--leaf)}
+.mi .mi-name{flex:2}
+.mi .mi-qty{flex:1;max-width:90px}
+.mi-macros{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px}
+.mi-macros label{font-size:.6rem;color:var(--ink-dim);display:flex;flex-direction:column;gap:3px;text-transform:uppercase;letter-spacing:.04em;font-family:'Sora',sans-serif}
+.mi-macros input{width:100%;text-align:center;padding:6px 4px}
+#mealEditSum{font-size:.8rem;color:var(--ink-dim)}
+#mealEditSum b{color:var(--ink)}
+
 /* ---------- UX: transições / agora / toast / edição / slash ---------- */
 .view.active{animation:viewIn .18s ease-out}
 @keyframes viewIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
@@ -442,7 +455,7 @@ const SUPABASE_DEFAULT = {
   key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZpbmRneHRwb215Y3VmeGZzeWl5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwMjQ3NzcsImV4cCI6MjA5ODYwMDc3N30.T3NfIknk3xtywO3E8Xs6LlWFgZNUnV-HUoj9RbIQ9ig'
 };
 
-const APP_VERSION = 'v1.8';
+const APP_VERSION = 'v1.9';
 const S = { meals: [], finances: [], tasks: [], events: [], history: [], settings: null, recurring: [] };
 let storageMode = 'none';
 let localTs = 0; // timestamp da última gravação conhecida (p/ sync entre dispositivos)
@@ -736,7 +749,7 @@ function dataSummary() {
   const finMonthEntries = S.finances.filter(f => f.date && f.date.startsWith(month));
   return {
     hoje: today,
-    refeicoes_hoje: mealsToday.map(m => ({ id: m.id, titulo: m.title, kcal: m.kcal, proteina_g: m.protein_g, carbo_g: m.carbs_g, gordura_g: m.fat_g })),
+    refeicoes_hoje: mealsToday.map(m => ({ id: m.id, titulo: m.title, kcal: m.kcal, proteina_g: m.protein_g, carbo_g: m.carbs_g, gordura_g: m.fat_g, itens: (m.items || []).map(i => ({ nome: i.name, qtd: i.qty, kcal: i.kcal, p: i.protein_g, c: i.carbs_g, g: i.fat_g })) })),
     totais_hoje: mealsToday.reduce((a, m) => ({ kcal: a.kcal + (m.kcal||0), p: a.p + (m.protein_g||0), c: a.c + (m.carbs_g||0), g: a.g + (m.fat_g||0) }), {kcal:0,p:0,c:0,g:0}),
     financas_mes_atual: finMonthEntries.map(f => ({ id: f.id, tipo: f.kind, desc: f.desc, valor: f.amount, categoria: f.category, negocio: f.business || 'Pessoal', data: f.date })),
     financas_meses_anteriores_resumo: resumoMesesAnteriores(),
@@ -794,6 +807,8 @@ Ações possíveis dentro de "actions":
 7. {"type":"add_recurring","rec":{"desc":"Internet","amount":120,"kind":"despesa|receita","category":"Moradia","business":"Pessoal","day":5}}
    (lançamento fixo mensal — o app materializa automaticamente todo mês no dia indicado; use quando o usuário falar em gasto/receita fixo, mensalidade, assinatura, "todo mês")
 8. {"type":"delete_recurring","id":"id do fixo (dos dados abaixo)"}
+9. {"type":"update_meal","id":"id da refeição (dos dados abaixo)","meal":{mesmo formato do add_meal, com a lista COMPLETA de itens atualizada}}
+   Use quando o usuário corrigir uma refeição já registrada ("na verdade era 200g de arroz", "não tinha feijão", "adiciona um ovo"): recalcule os macros das novas quantidades e reenvie todos os itens, não só o alterado.
 
 Regras:
 - FOTOS — identifique o tipo antes de agir:
@@ -990,6 +1005,24 @@ function applyAction(a) {
       S.events.push(ev); saveState('events');
       renderEventCard(ev);
     }
+    else if (a.type === 'update_meal' && a.id && a.meal) {
+      const m = S.meals.find(x => x.id === a.id);
+      if (m) {
+        const mm = a.meal;
+        const items = mm.items || m.items || [];
+        const sum = k => items.reduce((s, i) => s + (Number(i[k]) || 0), 0);
+        m.title = mm.title || m.title;
+        m.date = mm.date || m.date;
+        m.items = items;
+        m.kcal = Math.round(Number(mm.kcal) || sum('kcal'));
+        m.protein_g = Math.round((Number(mm.protein_g) || sum('protein_g')) * 10) / 10;
+        m.carbs_g = Math.round((Number(mm.carbs_g) || sum('carbs_g')) * 10) / 10;
+        m.fat_g = Math.round((Number(mm.fat_g) || sum('fat_g')) * 10) / 10;
+        saveState('meals');
+        renderMealCard(m, '✏️ refeição corrigida', false);
+        if (currentView === 'meals') renderMeals();
+      }
+    }
     else if (a.type === 'add_recurring' && a.rec) {
       const r = a.rec;
       const rec = { id: uid(), desc: r.desc || '—', amount: Math.abs(Number(r.amount) || 0), kind: r.kind === 'receita' ? 'receita' : 'despesa', category: r.category || 'Outros', business: BIZ.includes(r.business) ? r.business : 'Pessoal', day: Math.min(Math.max(1, Number(r.day) || 1), 31), active: true };
@@ -1030,15 +1063,15 @@ function addUndo(card, col, id) {
   };
   card.appendChild(b);
 }
-function renderMealCard(m) {
-  const c = makeCard('meal', '🥗 refeição registrada');
+function renderMealCard(m, tag, withUndo) {
+  const c = makeCard('meal', tag || '🥗 refeição registrada');
   c.innerHTML += `<div class="card-title">${esc(m.title)} · ${fmtDate(m.date)}</div>
     <ul>${(m.items||[]).map(i => `<li>${esc(i.name)}${i.qty ? ' — ' + esc(i.qty) : ''}</li>`).join('')}</ul>
     <div class="macro-row">
       <div><b>${m.kcal}</b> kcal</div><div><b>${m.protein_g}g</b> prot</div>
       <div><b>${m.carbs_g}g</b> carb</div><div><b>${m.fat_g}g</b> gord</div>
     </div>`;
-  addUndo(c, 'meals', m.id);
+  if (withUndo !== false) addUndo(c, 'meals', m.id);
 }
 function renderFinanceCard(e) {
   const pos = e.kind === 'receita';
@@ -1564,10 +1597,93 @@ const EDIT_FIELDS = {
     { k: 'location', l: 'Local', t: 'text' }
   ]
 };
+/* ---------- editor de refeição (por alimento) ---------- */
+function mealItemRow(i) {
+  i = i || {};
+  return `<div class="mi">
+    <div class="mi-top">
+      <input type="text" class="mi-name" placeholder="alimento" value="${esc(i.name || '')}">
+      <input type="text" class="mi-qty" placeholder="qtd (150g)" value="${esc(i.qty || '')}">
+      <button class="del-btn" onclick="this.closest('.mi').remove();mealEditTotals()">✕</button>
+    </div>
+    <div class="mi-macros">
+      <label>kcal<input type="number" inputmode="decimal" class="mi-kcal" value="${i.kcal ?? ''}"></label>
+      <label>prot g<input type="number" inputmode="decimal" class="mi-p" value="${i.protein_g ?? ''}"></label>
+      <label>carb g<input type="number" inputmode="decimal" class="mi-c" value="${i.carbs_g ?? ''}"></label>
+      <label>gord g<input type="number" inputmode="decimal" class="mi-g" value="${i.fat_g ?? ''}"></label>
+    </div>
+  </div>`;
+}
+function openMealEdit(m) {
+  editing = { col: 'meals', id: m.id };
+  // refeição sem itens (registro antigo/simples): vira um item único editável
+  const items = (m.items && m.items.length) ? m.items
+    : [{ name: m.title, qty: '', kcal: m.kcal, protein_g: m.protein_g, carbs_g: m.carbs_g, fat_g: m.fat_g }];
+  const sheet = document.getElementById('modalSheet');
+  sheet.innerHTML = `<h3>✎ Editar refeição</h3>
+    <div class="set-field"><label>Nome</label><input type="text" id="me_title" value="${esc(m.title)}"></div>
+    <div class="set-field"><label>Data</label><input type="date" id="me_date" value="${m.date}"></div>
+    <div class="section-label" style="margin-top:10px">Alimentos</div>
+    <div id="mealItems">${items.map(mealItemRow).join('')}</div>
+    <button class="btn ghost" onclick="addMealItem()">+ adicionar alimento</button>
+    <div id="mealEditSum" style="margin-top:10px"></div>
+    <div class="btn-row" style="margin-top:14px">
+      <button class="btn" onclick="saveMealEdit()">Salvar</button>
+      <button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn ghost" style="margin-left:auto;color:var(--clay)" onclick="closeModal();delItem('meals','${m.id}')">Excluir</button>
+    </div>`;
+  sheet.oninput = mealEditTotals;
+  mealEditTotals();
+  document.getElementById('modalOverlay').classList.add('open');
+}
+function addMealItem() {
+  document.getElementById('mealItems').insertAdjacentHTML('beforeend', mealItemRow());
+  mealEditTotals();
+  const rows = document.querySelectorAll('#mealItems .mi-name');
+  rows[rows.length - 1].focus();
+}
+function readMealItems() {
+  return [...document.querySelectorAll('#mealItems .mi')].map(r => ({
+    name: r.querySelector('.mi-name').value.trim(),
+    qty: r.querySelector('.mi-qty').value.trim(),
+    kcal: parseFloat(r.querySelector('.mi-kcal').value) || 0,
+    protein_g: parseFloat(r.querySelector('.mi-p').value) || 0,
+    carbs_g: parseFloat(r.querySelector('.mi-c').value) || 0,
+    fat_g: parseFloat(r.querySelector('.mi-g').value) || 0
+  })).filter(i => i.name);
+}
+function mealEditTotals() {
+  const el = document.getElementById('mealEditSum');
+  if (!el) return;
+  const it = readMealItems();
+  const sum = k => it.reduce((a, i) => a + i[k], 0);
+  el.innerHTML = `Total: <b>${Math.round(sum('kcal'))} kcal</b> · <b>${Math.round(sum('protein_g'))}g</b> prot · <b>${Math.round(sum('carbs_g'))}g</b> carb · <b>${Math.round(sum('fat_g'))}g</b> gord`;
+}
+function saveMealEdit() {
+  const m = S.meals.find(x => x.id === editing.id);
+  if (m) {
+    const items = readMealItems();
+    m.title = document.getElementById('me_title').value.trim() || m.title;
+    m.date = document.getElementById('me_date').value || m.date;
+    m.items = items;
+    const sum = k => items.reduce((a, i) => a + i[k], 0);
+    m.kcal = Math.round(sum('kcal'));
+    m.protein_g = Math.round(sum('protein_g') * 10) / 10;
+    m.carbs_g = Math.round(sum('carbs_g') * 10) / 10;
+    m.fat_g = Math.round(sum('fat_g') * 10) / 10;
+    saveState('meals');
+    renderMeals();
+    if (currentView === 'home') renderHome();
+    toast('Refeição atualizada');
+  }
+  closeModal();
+}
+
 let editing = null;
 function openEdit(col, id) {
   const item = S[col].find(x => x.id === id);
   if (!item) return;
+  if (col === 'meals') { openMealEdit(item); return; }
   editing = { col, id };
   const sheet = document.getElementById('modalSheet');
   sheet.innerHTML = `<h3>✎ Editar</h3>` +
